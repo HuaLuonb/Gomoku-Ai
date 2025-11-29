@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>五子棋 - 终极智能版</title>
+<title>五子棋 - 神级AI版</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   body {
@@ -37,8 +37,8 @@
   h1 {
     font-size: 32px;
     margin: 0;
-    color: #4db8ff;
-    text-shadow: 0 0 15px rgba(77, 184, 255, 0.7);
+    color: #ff4d4d;
+    text-shadow: 0 0 15px rgba(255, 77, 77, 0.7);
     letter-spacing: 2px;
     position: relative;
     display: inline-block;
@@ -51,7 +51,7 @@
     left: 10%;
     width: 80%;
     height: 3px;
-    background: linear-gradient(90deg, transparent, #4db8ff, transparent);
+    background: linear-gradient(90deg, transparent, #ff4d4d, transparent);
   }
   
   .subtitle {
@@ -79,15 +79,15 @@
     border-radius: 10px;
     padding: 15px;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(77, 184, 255, 0.3);
+    border: 1px solid rgba(255, 77, 77, 0.3);
   }
   
   .panel-title {
     font-size: 18px;
-    color: #4db8ff;
+    color: #ff4d4d;
     margin-bottom: 15px;
     padding-bottom: 8px;
-    border-bottom: 1px solid rgba(77, 184, 255, 0.3);
+    border-bottom: 1px solid rgba(255, 77, 77, 0.3);
   }
   
   .stats {
@@ -238,7 +238,7 @@
     position: absolute;
     width: 4px;
     height: 4px;
-    background: rgba(77, 184, 255, 0.5);
+    background: rgba(255, 77, 77, 0.5);
     border-radius: 50%;
     animation: float 15s infinite linear;
   }
@@ -266,6 +266,19 @@
     color: #ffffaa;
   }
   
+  .threat-warning {
+    color: #ff4d4d;
+    font-weight: bold;
+    margin-top: 10px;
+    animation: blink 1s infinite;
+  }
+  
+  @keyframes blink {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+  }
+  
   @media (max-width: 768px) {
     .game-area {
       flex-direction: column;
@@ -283,9 +296,9 @@
   
   <div class="container">
     <div class="header">
-      <h1>五子棋 - 终极智能版</h1>
-      <div class="subtitle">挑战极限AI，测试你的五子棋水平</div>
-      <div class="difficulty-badge">超高难度 - 无法调节</div>
+      <h1>五子棋 - 神级AI版</h1>
+      <div class="subtitle">挑战不可能，测试你的极限</div>
+      <div class="difficulty-badge">神级难度 - 无法击败</div>
     </div>
     
     <div class="game-area">
@@ -293,6 +306,7 @@
         <canvas id="board" width="450" height="450"></canvas>
         <div id="status">轮到你下棋（黑）</div>
         <div class="ai-thinking" id="aiThinking" style="display:none">AI正在深度思考中...</div>
+        <div class="threat-warning" id="threatWarning" style="display:none">检测到玩家威胁，AI正在强力防守！</div>
       </div>
       
       <div class="info-panel">
@@ -331,6 +345,10 @@
             <span class="stat-label">思考时间:</span>
             <span class="stat-value" id="thinkTime">0ms</span>
           </div>
+          <div class="stat-item">
+            <span class="stat-label">威胁检测:</span>
+            <span class="stat-value" id="threats">0</span>
+          </div>
         </div>
       </div>
     </div>
@@ -346,14 +364,16 @@
 const SIZE = 15;
 const CELL = 30;
 
-// 超强AI配置 - 最高难度
+// 神级AI配置 - 无法被击败
 const AI_CONFIG = {
-  timeLimit: 3000,  // 3秒思考时间
-  maxDepth: 12,     // 最大搜索深度
-  searchCount: 25,  // 候选点数量
+  timeLimit: 5000,  // 5秒思考时间
+  maxDepth: 16,     // 最大搜索深度
+  searchCount: 30,  // 候选点数量
   useKillerHeuristic: true, // 使用杀手启发
   useTranspositionTable: true, // 使用置换表
-  useHistoryHeuristic: true   // 使用历史启发
+  useHistoryHeuristic: true,   // 使用历史启发
+  useThreatDetection: true,    // 使用威胁检测
+  threatResponseMultiplier: 5  // 威胁响应倍数
 };
 
 /* ====================== */
@@ -370,6 +390,8 @@ const depthEl = document.getElementById('depth');
 const nodesEl = document.getElementById('nodes');
 const thinkTimeEl = document.getElementById('thinkTime');
 const aiThinkingEl = document.getElementById('aiThinking');
+const threatWarningEl = document.getElementById('threatWarning');
+const threatsEl = document.getElementById('threats');
 
 let board = [];   
 let history = []; 
@@ -377,6 +399,7 @@ let over = false;
 let myTurn = true;
 let winLine = [];
 let wins = 0, losses = 0, draws = 0, moves = 0;
+let threatCount = 0;
 
 // 全局搜索控制
 let deadline = 0;
@@ -390,18 +413,21 @@ let transpositionTable = {};
 let killerMoves = Array.from({length: 20}, () => [null, null]); // 杀手启发表
 let historyTable = Array.from({length: SIZE}, () => Array(SIZE).fill(0)); // 历史启发表
 
-// 精细的分数表
+// 超精细的分数表 - 大幅提高防守权重
 const SCORE = {
-  FIVE: 10000000,
-  FOUR_LIVE: 1000000,
-  FOUR_DEAD: 50000,
-  THREE_LIVE: 30000,
-  THREE_DEAD: 2000,
-  TWO_LIVE: 500,
-  TWO_DEAD: 50,
-  ONE: 10,
-  BLOCK_FOUR: 100000,
-  BLOCK_THREE: 5000
+  FIVE: 100000000,
+  FOUR_LIVE: 5000000,
+  FOUR_DEAD: 500000,
+  THREE_LIVE: 300000,
+  THREE_DEAD: 30000,
+  TWO_LIVE: 5000,
+  TWO_DEAD: 500,
+  ONE: 50,
+  BLOCK_FOUR: 2000000,
+  BLOCK_THREE: 100000,
+  BLOCK_TWO: 5000,
+  DOUBLE_THREE: 1000000,
+  DOUBLE_FOUR: 5000000
 };
 
 /* ---- 基础检查 ---- */
@@ -423,6 +449,140 @@ function checkWin(x,y,role, bd){
     if(count>=5) return true;
   }
   return false;
+}
+
+/* ---- 威胁检测系统 ---- */
+
+// 检测玩家形成的威胁
+function detectThreats(role) {
+  const threats = [];
+  const oppRole = role === 1 ? 2 : 1;
+  
+  // 检查所有空位，看是否能形成威胁
+  for(let x=0; x<SIZE; x++) {
+    for(let y=0; y<SIZE; y++) {
+      if(board[x][y] !== 0) continue;
+      
+      // 模拟玩家下这个位置
+      board[x][y] = oppRole;
+      
+      // 检查是否形成活三
+      if(countThreats(x, y, oppRole) >= 1) {
+        threats.push({x, y, type: '活三', score: SCORE.BLOCK_THREE * 10});
+      }
+      
+      // 检查是否形成冲四
+      if(countThreats(x, y, oppRole, 'four') >= 1) {
+        threats.push({x, y, type: '冲四', score: SCORE.BLOCK_FOUR * 10});
+      }
+      
+      // 检查是否形成双三
+      if(countDoubleThreats(x, y, oppRole) >= 1) {
+        threats.push({x, y, type: '双三', score: SCORE.DOUBLE_THREE * 10});
+      }
+      
+      board[x][y] = 0;
+    }
+  }
+  
+  return threats;
+}
+
+// 计算某个位置形成的威胁数量
+function countThreats(x, y, role, type = 'three') {
+  let threatCount = 0;
+  const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+  
+  for(const d of dirs) {
+    // 检查这个方向是否能形成指定类型的威胁
+    const threat = checkDirectionThreat(x, y, d[0], d[1], role, type);
+    if(threat) threatCount++;
+  }
+  
+  return threatCount;
+}
+
+// 检查特定方向的威胁
+function checkDirectionThreat(x, y, dx, dy, role, type) {
+  // 检查这个方向是否能形成威胁
+  let count = 1; // 当前位置
+  let leftBlock = false;
+  let rightBlock = false;
+  
+  // 正向检查
+  for(let i=1; i<=4; i++) {
+    const nx = x + dx * i;
+    const ny = y + dy * i;
+    if(!inBoard(nx, ny)) {
+      rightBlock = true;
+      break;
+    }
+    if(board[nx][ny] === role) {
+      count++;
+    } else if(board[nx][ny] === 0) {
+      break;
+    } else {
+      rightBlock = true;
+      break;
+    }
+  }
+  
+  // 反向检查
+  for(let i=1; i<=4; i++) {
+    const nx = x - dx * i;
+    const ny = y - dy * i;
+    if(!inBoard(nx, ny)) {
+      leftBlock = true;
+      break;
+    }
+    if(board[nx][ny] === role) {
+      count++;
+    } else if(board[nx][ny] === 0) {
+      break;
+    } else {
+      leftBlock = true;
+      break;
+    }
+  }
+  
+  // 根据类型判断是否是威胁
+  if(type === 'three') {
+    // 活三: 连续3子且两端开放
+    if(count === 3 && !leftBlock && !rightBlock) return true;
+    // 死三: 连续3子且一端被挡
+    if(count === 3 && (!leftBlock || !rightBlock)) return true;
+  } else if(type === 'four') {
+    // 冲四: 连续4子且一端开放
+    if(count === 4 && (!leftBlock || !rightBlock)) return true;
+  }
+  
+  return false;
+}
+
+// 计算双威胁数量
+function countDoubleThreats(x, y, role) {
+  let doubleThreats = 0;
+  
+  // 检查这个位置是否能形成两个以上的威胁
+  board[x][y] = role;
+  
+  const threatDirections = [];
+  const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+  
+  for(const d of dirs) {
+    if(checkDirectionThreat(x, y, d[0], d[1], role, 'three') || 
+       checkDirectionThreat(x, y, d[0], d[1], role, 'four')) {
+      threatDirections.push(d);
+    }
+  }
+  
+  // 如果有两个以上的威胁方向，则是双威胁
+  if(threatDirections.length >= 2) {
+    doubleThreats = threatDirections.length;
+  }
+  
+  board[x][y] = 0;
+  return doubleThreats;
 }
 
 /* ---- 增强的评估函数 ---- */
@@ -508,11 +668,13 @@ function evalPoint(x, y, role) {
     const threatScore = evalDirection(x, y, d[0], d[1], oppRole);
     // 防守价值根据威胁程度调整
     if(threatScore >= SCORE.FOUR_LIVE) {
-      score += SCORE.BLOCK_FOUR;
+      score += SCORE.BLOCK_FOUR * AI_CONFIG.threatResponseMultiplier;
     } else if(threatScore >= SCORE.THREE_LIVE) {
-      score += SCORE.BLOCK_THREE;
+      score += SCORE.BLOCK_THREE * AI_CONFIG.threatResponseMultiplier;
+    } else if(threatScore >= SCORE.TWO_LIVE) {
+      score += SCORE.BLOCK_TWO * AI_CONFIG.threatResponseMultiplier;
     } else {
-      score += threatScore * 0.8; // 防守价值稍低于进攻
+      score += threatScore * AI_CONFIG.threatResponseMultiplier; // 大幅提高防守权重
     }
   }
   
@@ -539,7 +701,7 @@ function evaluateBoard(role) {
         totalScore += evalPoint(x, y, role);
       } else {
         // 对方棋子，评估威胁
-        totalScore -= evalPoint(x, y, role === 1 ? 2 : 1) * 0.8;
+        totalScore -= evalPoint(x, y, role === 1 ? 2 : 1) * AI_CONFIG.threatResponseMultiplier;
       }
     }
   }
@@ -715,7 +877,7 @@ function createBoardHash() {
   return hash;
 }
 
-/* ---- 顶层逻辑：迭代加深 + 必杀检查 ---- */
+/* ---- 顶层逻辑：迭代加深 + 必杀检查 + 威胁检测 ---- */
 
 function findBestMove() {
   // 0. 预处理：立即获胜或被迫防守
@@ -743,6 +905,27 @@ function findBestMove() {
     board[m.x][m.y] = 0;
   }
   
+  // C. 威胁检测系统 - 检测玩家形成的威胁
+  if(AI_CONFIG.useThreatDetection) {
+    const threats = detectThreats(2);
+    threatCount = threats.length;
+    threatsEl.textContent = threatCount;
+    
+    if(threats.length > 0) {
+      // 显示威胁警告
+      threatWarningEl.style.display = 'block';
+      
+      // 对威胁进行排序，选择最严重的威胁进行防守
+      threats.sort((a, b) => b.score - a.score);
+      console.log(`检测到 ${threats.length} 个威胁，最严重的是: ${threats[0].type}`);
+      
+      // 返回最严重威胁的防守位置
+      return threats[0];
+    } else {
+      threatWarningEl.style.display = 'none';
+    }
+  }
+  
   // 1. 初始化搜索
   totalNodes = 0;
   isTimeout = false;
@@ -752,7 +935,7 @@ function findBestMove() {
   
   // 2. 迭代加深
   const maxDepth = AI_CONFIG.maxDepth;
-  for(let depth = 2; depth <= maxDepth; depth += 2) {
+  for(let depth = 4; depth <= maxDepth; depth += 2) {
     currentDepth = depth;
     let currentBest = null;
     let maxVal = -Infinity;
@@ -950,11 +1133,14 @@ function init(){
   board = Array.from({length:SIZE},()=>Array(SIZE).fill(0));
   history=[]; over=false; myTurn=true; winLine=[];
   moves = 0;
+  threatCount = 0;
   movesEl.textContent = moves;
+  threatsEl.textContent = threatCount;
   statusEl.textContent="轮到你下棋（黑）";
   statusEl.style.color="#4db8ff";
   statusEl.classList.remove('thinking');
   aiThinkingEl.style.display = 'none';
+  threatWarningEl.style.display = 'none';
   draw();
 }
 
