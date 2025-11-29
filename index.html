@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<title>五子棋 - 神级AI版</title>
+<title>五子棋 - 神级AI修复版</title>
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <style>
   body {
@@ -296,7 +296,7 @@
   
   <div class="container">
     <div class="header">
-      <h1>五子棋 - 神级AI版</h1>
+      <h1>五子棋 - 神级AI修复版</h1>
       <div class="subtitle">挑战不可能，测试你的极限</div>
       <div class="difficulty-badge">神级难度 - 无法击败</div>
     </div>
@@ -373,7 +373,8 @@ const AI_CONFIG = {
   useTranspositionTable: true, // 使用置换表
   useHistoryHeuristic: true,   // 使用历史启发
   useThreatDetection: true,    // 使用威胁检测
-  threatResponseMultiplier: 5  // 威胁响应倍数
+  threatResponseMultiplier: 5,  // 威胁响应倍数
+  threatThreshold: 3 // 只有检测到3个或以上连子才启动强力防守
 };
 
 /* ====================== */
@@ -458,131 +459,145 @@ function detectThreats(role) {
   const threats = [];
   const oppRole = role === 1 ? 2 : 1;
   
-  // 检查所有空位，看是否能形成威胁
+  // 检查棋盘上所有已有棋子的威胁
   for(let x=0; x<SIZE; x++) {
     for(let y=0; y<SIZE; y++) {
-      if(board[x][y] !== 0) continue;
+      if(board[x][y] !== oppRole) continue;
       
-      // 模拟玩家下这个位置
-      board[x][y] = oppRole;
-      
-      // 检查是否形成活三
-      if(countThreats(x, y, oppRole) >= 1) {
-        threats.push({x, y, type: '活三', score: SCORE.BLOCK_THREE * 10});
+      // 检查这个棋子是否形成了威胁
+      const threatLevel = evaluateThreatLevel(x, y, oppRole);
+      if(threatLevel > 0) {
+        // 找到最佳防守位置
+        const defenseMove = findBestDefenseMove(x, y, oppRole);
+        if(defenseMove) {
+          threats.push({
+            x: defenseMove.x, 
+            y: defenseMove.y, 
+            type: threatLevel === 1 ? '活三' : (threatLevel === 2 ? '冲四' : '双三'), 
+            score: threatLevel * 100000
+          });
+        }
       }
-      
-      // 检查是否形成冲四
-      if(countThreats(x, y, oppRole, 'four') >= 1) {
-        threats.push({x, y, type: '冲四', score: SCORE.BLOCK_FOUR * 10});
-      }
-      
-      // 检查是否形成双三
-      if(countDoubleThreats(x, y, oppRole) >= 1) {
-        threats.push({x, y, type: '双三', score: SCORE.DOUBLE_THREE * 10});
-      }
-      
-      board[x][y] = 0;
     }
   }
   
   return threats;
 }
 
-// 计算某个位置形成的威胁数量
-function countThreats(x, y, role, type = 'three') {
-  let threatCount = 0;
+// 评估威胁等级
+function evaluateThreatLevel(x, y, role) {
+  let maxThreatLevel = 0;
   const dirs = [[1,0],[0,1],[1,1],[1,-1]];
   
   for(const d of dirs) {
-    // 检查这个方向是否能形成指定类型的威胁
-    const threat = checkDirectionThreat(x, y, d[0], d[1], role, type);
-    if(threat) threatCount++;
+    const threat = checkDirectionThreat(x, y, d[0], d[1], role);
+    if(threat > maxThreatLevel) {
+      maxThreatLevel = threat;
+    }
   }
   
-  return threatCount;
+  // 检查双威胁
+  let doubleThreatCount = 0;
+  for(const d of dirs) {
+    if(checkDirectionThreat(x, y, d[0], d[1], role) >= 1) {
+      doubleThreatCount++;
+    }
+  }
+  
+  if(doubleThreatCount >= 2) {
+    maxThreatLevel = Math.max(maxThreatLevel, 3);
+  }
+  
+  return maxThreatLevel;
 }
 
 // 检查特定方向的威胁
-function checkDirectionThreat(x, y, dx, dy, role, type) {
-  // 检查这个方向是否能形成威胁
+function checkDirectionThreat(x, y, dx, dy, role) {
+  // 计算这个方向上的连续棋子数
   let count = 1; // 当前位置
-  let leftBlock = false;
-  let rightBlock = false;
   
   // 正向检查
   for(let i=1; i<=4; i++) {
     const nx = x + dx * i;
     const ny = y + dy * i;
-    if(!inBoard(nx, ny)) {
-      rightBlock = true;
-      break;
-    }
-    if(board[nx][ny] === role) {
-      count++;
-    } else if(board[nx][ny] === 0) {
-      break;
-    } else {
-      rightBlock = true;
-      break;
-    }
+    if(!inBoard(nx, ny) || board[nx][ny] !== role) break;
+    count++;
   }
   
   // 反向检查
   for(let i=1; i<=4; i++) {
     const nx = x - dx * i;
     const ny = y - dy * i;
-    if(!inBoard(nx, ny)) {
-      leftBlock = true;
-      break;
-    }
-    if(board[nx][ny] === role) {
-      count++;
-    } else if(board[nx][ny] === 0) {
-      break;
-    } else {
-      leftBlock = true;
-      break;
+    if(!inBoard(nx, ny) || board[nx][ny] !== role) break;
+    count++;
+  }
+  
+  // 检查是否形成威胁
+  if(count >= 5) return 0; // 已经赢了，不需要防守
+  if(count >= AI_CONFIG.threatThreshold) {
+    // 检查是否是活三或冲四
+    const forwardOpen = checkOpenEnd(x, y, dx, dy, role);
+    const backwardOpen = checkOpenEnd(x, y, -dx, -dy, role);
+    
+    if(count === 3) {
+      if(forwardOpen && backwardOpen) return 1; // 活三
+      if(forwardOpen || backwardOpen) return 1; // 死三也算威胁
+    } else if(count === 4) {
+      if(forwardOpen || backwardOpen) return 2; // 冲四
     }
   }
   
-  // 根据类型判断是否是威胁
-  if(type === 'three') {
-    // 活三: 连续3子且两端开放
-    if(count === 3 && !leftBlock && !rightBlock) return true;
-    // 死三: 连续3子且一端被挡
-    if(count === 3 && (!leftBlock || !rightBlock)) return true;
-  } else if(type === 'four') {
-    // 冲四: 连续4子且一端开放
-    if(count === 4 && (!leftBlock || !rightBlock)) return true;
-  }
-  
-  return false;
+  return 0;
 }
 
-// 计算双威胁数量
-function countDoubleThreats(x, y, role) {
-  let doubleThreats = 0;
-  
-  // 检查这个位置是否能形成两个以上的威胁
-  board[x][y] = role;
-  
-  const threatDirections = [];
+// 检查方向是否开放
+function checkOpenEnd(x, y, dx, dy, role) {
+  let i = 1;
+  while(true) {
+    const nx = x + dx * i;
+    const ny = y + dy * i;
+    if(!inBoard(nx, ny)) return false;
+    if(board[nx][ny] === 0) return true;
+    if(board[nx][ny] !== role) return false;
+    i++;
+  }
+}
+
+// 找到最佳防守位置
+function findBestDefenseMove(x, y, role) {
   const dirs = [[1,0],[0,1],[1,1],[1,-1]];
+  let bestMove = null;
+  let bestScore = -Infinity;
   
   for(const d of dirs) {
-    if(checkDirectionThreat(x, y, d[0], d[1], role, 'three') || 
-       checkDirectionThreat(x, y, d[0], d[1], role, 'four')) {
-      threatDirections.push(d);
+    // 检查正向防守位置
+    for(let i=1; i<=2; i++) {
+      const nx = x + d[0] * i;
+      const ny = y + d[1] * i;
+      if(inBoard(nx, ny) && board[nx][ny] === 0) {
+        const score = evalPoint(nx, ny, role === 1 ? 2 : 1);
+        if(score > bestScore) {
+          bestScore = score;
+          bestMove = {x: nx, y: ny};
+        }
+      }
+    }
+    
+    // 检查反向防守位置
+    for(let i=1; i<=2; i++) {
+      const nx = x - d[0] * i;
+      const ny = y - d[1] * i;
+      if(inBoard(nx, ny) && board[nx][ny] === 0) {
+        const score = evalPoint(nx, ny, role === 1 ? 2 : 1);
+        if(score > bestScore) {
+          bestScore = score;
+          bestMove = {x: nx, y: ny};
+        }
+      }
     }
   }
   
-  // 如果有两个以上的威胁方向，则是双威胁
-  if(threatDirections.length >= 2) {
-    doubleThreats = threatDirections.length;
-  }
-  
-  board[x][y] = 0;
-  return doubleThreats;
+  return bestMove;
 }
 
 /* ---- 增强的评估函数 ---- */
@@ -980,7 +995,7 @@ function findBestMove() {
 /* ---- 游戏流程控制 ---- */
 
 function doMove(x,y,role){
-  if(board[x][y] !== 0) return false;
+  if(board[x][y] !== 0) return false; // 修复：确保不能下在已有棋子的位置
   board[x][y] = role;
   history.push({x,y,role});
   moves++;
@@ -1051,7 +1066,22 @@ function aiRound(){
     nodesEl.textContent = totalNodes;
     thinkTimeEl.textContent = thinkTime + 'ms';
     
-    if(move) doMove(move.x, move.y, 2);
+    if(move) {
+      // 确保AI不会下在已有棋子的位置
+      if(board[move.x][move.y] === 0) {
+        doMove(move.x, move.y, 2);
+      } else {
+        // 如果AI选择的点已有棋子，选择下一个最佳点
+        console.log("AI试图下在已有棋子的位置，选择下一个最佳点");
+        const allCands = getCandidates(2);
+        for(let i = 1; i < allCands.length; i++) {
+          if(board[allCands[i].x][allCands[i].y] === 0) {
+            doMove(allCands[i].x, allCands[i].y, 2);
+            break;
+          }
+        }
+      }
+    }
     
     if(!over){
       myTurn = true;
@@ -1069,6 +1099,19 @@ function handleInput(e){
   const x = Math.floor((e.clientX - rect.left) / CELL);
   const y = Math.floor((e.clientY - rect.top) / CELL);
   if(!inBoard(x,y)) return;
+  
+  // 确保不能下在已有棋子的位置
+  if(board[x][y] !== 0) {
+    statusEl.textContent = "这里已经有棋子了！";
+    statusEl.style.color = "#ff4d4d";
+    setTimeout(() => {
+      if(!over) {
+        statusEl.textContent = "轮到你下棋（黑）";
+        statusEl.style.color = "#4db8ff";
+      }
+    }, 1000);
+    return;
+  }
   
   if(doMove(x,y,1)) return;
   
